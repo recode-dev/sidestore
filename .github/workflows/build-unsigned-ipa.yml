@@ -1,0 +1,62 @@
+name: SideStore fork - unsigned ipa with the 2FA fix
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [develop, main, 'fix/**']
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Pin SideSign to the 2FA fix (752d1ef)
+        run: |
+          cd Dependencies/SideSign
+          git fetch --depth 1 origin 752d1ef602aa792a432ffa1e71646dc1ecf7363c
+          git checkout -q FETCH_HEAD
+          echo "SideSign at: $(git rev-parse --short HEAD) $(git log -1 --pretty=%s)"
+          cd "$GITHUB_WORKSPACE"
+          git -c user.email=ci@local -c user.name=ci commit -am "ci: pin SideSign 752d1ef (2FA hsc 409 fix)" || true
+
+      - name: Stamp a readable version
+        run: |
+          sed -E -i '' "s/^MARKETING_VERSION = .*/MARKETING_VERSION = 0.7.0-fork.$(date +%Y%m%d)/" Build.xcconfig
+          grep MARKETING_VERSION Build.xcconfig
+
+      - name: Tooling
+        run: brew install ldid xcbeautify
+
+      - uses: maxim-lobanov/setup-xcode@v1.6.0
+        with:
+          xcode-version: "26.4"
+
+      - name: Build, fakesign, package
+        run: |
+          mkdir -p build/logs
+          set -o pipefail
+          NSUnbufferedIO=YES make -B build 2>&1 | tee build/logs/build.log | xcbeautify --renderer github-actions
+          make fakesign
+          make ipa
+          ls -la SideStore.ipa
+          shasum -a 256 SideStore.ipa | tee SideStore.ipa.sha256
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: SideStore-ipa-unsigned
+          path: |
+            SideStore.ipa
+            SideStore.ipa.sha256
+            build/logs/build.log
+          if-no-files-found: warn
